@@ -2,108 +2,625 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { AlertCircle, ArrowDownRight, ArrowUpRight, BedDouble, ChevronRight, CircleDollarSign, ClipboardList, FileBarChart, Home, LogOut, Menu, MessageSquare, MoreHorizontal, Plus, Search, Settings, Users, X } from 'lucide-react'
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { AlertCircle, BedDouble, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardList, FileBarChart, Home, LogOut, Menu, MessageSquare, Plus, Search, Users, Wrench, X } from 'lucide-react'
+import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import './styles.css'
 
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000', timeout: 5000 })
-api.interceptors.response.use(response => response, error => {
-  if (error.response?.status === 401) {
-    localStorage.removeItem('hostel_token')
-    localStorage.removeItem('hostel_user')
-    window.location.assign('/login')
-  }
+/* ------------------------------------------------------------------ API ---- */
+const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000', timeout: 30000 })
+const clearSession = () => { localStorage.removeItem('hostel_token'); localStorage.removeItem('hostel_user') }
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('hostel_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+api.interceptors.response.use(r => r, error => {
+  const isAuthCall = /\/auth\/(login|register)/.test(error.config?.url || '')
+  if (error.response?.status === 401 && !isAuthCall) { clearSession(); window.location.assign('/login') }
   return Promise.reject(error)
 })
-api.interceptors.request.use(config => { const token = localStorage.getItem('hostel_token'); if (token) config.headers.Authorization = `Bearer ${token}`; return config })
-const navItems = [
-  { to: '/', label: 'Dashboard', icon: Home }, { to: '/residents', label: 'Residents', icon: Users },
-  { to: '/rooms', label: 'Rooms & Beds', icon: BedDouble }, { to: '/allocations', label: 'Allocations', icon: ClipboardList },
-  { to: '/complaints', label: 'Complaints', icon: MessageSquare }, { to: '/fees', label: 'Fees & Payments', icon: CircleDollarSign },
-  { to: '/reports', label: 'Reports', icon: FileBarChart },
-]
-const dashboardData = {
-  stats: [
-    { label: 'Total Residents', value: '1,248', delta: '+8.2%', icon: Users, tone: 'teal' }, { label: 'Room Occupancy', value: '87.4%', delta: '+3.1%', icon: BedDouble, tone: 'blue' },
-    { label: 'Open Complaints', value: '24', delta: '-12.5%', icon: MessageSquare, tone: 'orange' }, { label: 'Pending Fees', value: '₹18,420', delta: '+4.6%', icon: CircleDollarSign, tone: 'purple' },
+const errorText = (error, fallback = 'Something went wrong. Please try again.') =>
+  typeof error?.response?.data?.detail === 'string' ? error.response.data.detail
+    : error?.request && !error?.response ? 'Cannot reach the API. Is the backend running?' : fallback
+const inr = value => `₹${Number(value || 0).toLocaleString('en-IN')}`
+const fmtDate = value => (value ? new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—')
+const pretty = value => String(value ?? '').replaceAll('_', ' ')
+
+const ROLE_NAV = {
+  administrator: [
+    { to: '/', label: 'Dashboard', icon: Home }, { to: '/residents', label: 'Residents', icon: Users },
+    { to: '/rooms', label: 'Rooms & Beds', icon: BedDouble }, { to: '/allocations', label: 'Allocations', icon: ClipboardList },
+    { to: '/complaints', label: 'Complaints', icon: MessageSquare }, { to: '/fees', label: 'Fees & Payments', icon: CircleDollarSign },
+    { to: '/reports', label: 'Reports', icon: FileBarChart },
   ],
-  occupancy: [{ month: 'Jan', occupied: 82, capacity: 100 }, { month: 'Feb', occupied: 84, capacity: 100 }, { month: 'Mar', occupied: 81, capacity: 100 }, { month: 'Apr', occupied: 86, capacity: 100 }, { month: 'May', occupied: 87, capacity: 100 }, { month: 'Jun', occupied: 87, capacity: 100 }, { month: 'Jul', occupied: 90, capacity: 100 }, { month: 'Aug', occupied: 87, capacity: 100 }],
-  complaints: [{ name: 'Resolved', value: 64, color: '#0f766e' }, { name: 'In progress', value: 24, color: '#f59e0b' }, { name: 'New', value: 12, color: '#e2e8f0' }],
+  resident: [
+    { to: '/', label: 'My Dashboard', icon: Home }, { to: '/complaints', label: 'My Complaints', icon: MessageSquare },
+    { to: '/fees', label: 'My Fees', icon: CircleDollarSign },
+  ],
+  maintenance_staff: [
+    { to: '/', label: 'My Work', icon: Wrench }, { to: '/complaints', label: 'Complaint Queue', icon: MessageSquare },
+  ],
 }
-async function getResource(path, fallback) { try { const { data } = await api.get(path); return { data: Array.isArray(data) ? data : data?.items || data, error: null } } catch (error) { return { data: fallback, error: error?.response?.data?.detail || 'The API is unavailable. Showing demo data instead.' } } }
+
+/* ------------------------------------------------------------------ App ---- */
 function App() {
   const [user, setUser] = useState(() => {
-    const token = localStorage.getItem('hostel_token')
-    if (!token || token === 'demo-session') return null
-    try { return JSON.parse(localStorage.getItem('hostel_user') || 'null') } catch { localStorage.removeItem('hostel_user'); return null }
+    if (!localStorage.getItem('hostel_token')) return null
+    try { return JSON.parse(localStorage.getItem('hostel_user') || 'null') } catch { clearSession(); return null }
   })
-  useEffect(() => { if (localStorage.getItem('hostel_token') === 'demo-session') { localStorage.removeItem('hostel_token'); localStorage.removeItem('hostel_user') } }, [])
-  const logout = () => { localStorage.removeItem('hostel_token'); localStorage.removeItem('hostel_user'); setUser(null) }
-  const authed = Boolean(localStorage.getItem('hostel_token') && user)
-  return <Routes><Route path="/login" element={authed ? <Navigate to="/" replace /> : <Login onLogin={setUser} />} /><Route path="*" element={authed ? <Shell user={user} onLogout={logout} /> : <Navigate to="/login" replace />} /></Routes>
+  const logout = () => { clearSession(); setUser(null) }
+  const authed = Boolean(user && localStorage.getItem('hostel_token'))
+  return (
+    <Routes>
+      <Route path="/login" element={authed ? <Navigate to="/" replace /> : <Login onLogin={setUser} />} />
+      <Route path="*" element={authed ? <Shell user={user} onLogout={logout} /> : <Navigate to="/login" replace />} />
+    </Routes>
+  )
 }
+
 function Login({ onLogin }) {
   const [mode, setMode] = useState('login')
   const [form, setForm] = useState({ full_name: '', email: '', password: '', roll_number: '', course: '', academic_year: '1', phone: '' })
-  const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const isRegistering = mode === 'register'
-  const update = event => setForm({ ...form, [event.target.name]: event.target.value })
-  const submit = async event => { event.preventDefault(); setLoading(true); setError(''); try { const path = isRegistering ? '/auth/register' : '/auth/login'; const payload = isRegistering ? { ...form, academic_year: Number(form.academic_year) } : { email: form.email, password: form.password }; const { data } = await api.post(path, payload); localStorage.setItem('hostel_token', data.access_token); localStorage.setItem('hostel_user', JSON.stringify(data.user)); onLogin(data.user) } catch (error) { setError(error.response?.status === 401 ? 'Incorrect email or password. Please try again.' : error.response?.data?.detail || (error.request ? 'Cannot connect to the API. Make sure the backend is running.' : 'Request failed. Please try again.')) } finally { setLoading(false) } }
-  return <div className="login-page"><div className="login-decoration"><div className="brand-mark large">H</div><h1>HostelHub</h1><p>Simple, smarter hostel administration.</p><div className="login-quote">“Everything you need to run a thriving residence, in one place.”</div></div><form className="login-card" onSubmit={submit}><div className="brand-row"><div className="brand-mark">H</div><span>HostelHub</span></div><h2>Welcome to HostelHub</h2><p className="muted">{isRegistering ? 'Create an account to get started.' : 'Sign in to your workspace.'}</p>{error && <div className="notice">{error}</div>}{isRegistering && <><label>Full name<input name="full_name" value={form.full_name} onChange={update} required /></label><label>Roll number<input name="roll_number" value={form.roll_number} onChange={update} required /></label><label>Course<input name="course" value={form.course} onChange={update} required /></label><label>Academic year<select name="academic_year" value={form.academic_year} onChange={update}><option value="1">Year 1</option><option value="2">Year 2</option><option value="3">Year 3</option><option value="4">Year 4</option></select></label></>}<label>Email address<input name="email" type="email" placeholder="you@example.com" value={form.email} onChange={update} required /></label><label>Password<input name="password" type="password" placeholder="Enter your password" value={form.password} onChange={update} minLength="8" required /></label><button className="button primary full" disabled={loading}>{loading ? 'Please wait…' : isRegistering ? 'Create account' : 'Sign in'}</button><button type="button" className="text-button auth-switch" onClick={() => { setMode(isRegistering ? 'login' : 'register'); setError('') }}>{isRegistering ? 'Already have an account? Sign in' : 'New user? Create an account'}</button></form></div>
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const registering = mode === 'register'
+  const update = e => setForm({ ...form, [e.target.name]: e.target.value })
+  const submit = async e => {
+    e.preventDefault(); setLoading(true); setError('')
+    try {
+      const path = registering ? '/auth/register' : '/auth/login'
+      const payload = registering ? { ...form, academic_year: Number(form.academic_year), phone: form.phone || null } : { email: form.email, password: form.password }
+      const { data } = await api.post(path, payload)
+      localStorage.setItem('hostel_token', data.access_token)
+      localStorage.setItem('hostel_user', JSON.stringify(data.user))
+      onLogin(data.user)
+    } catch (err) {
+      setError(err.response?.status === 401 ? 'Incorrect email or password.' : errorText(err, 'Request failed. Please try again.'))
+    } finally { setLoading(false) }
+  }
+  return (
+    <div className="login-page">
+      <div className="login-decoration">
+        <div className="brand-mark large">H</div><h1>HostelHub</h1><p>Simple, smarter hostel administration.</p>
+        <div className="login-quote">“Everything you need to run a thriving residence, in one place.”</div>
+      </div>
+      <form className="login-card" onSubmit={submit}>
+        <div className="brand-row"><div className="brand-mark">H</div><span>HostelHub</span></div>
+        <h2>{registering ? 'Create your account' : 'Welcome back'}</h2>
+        <p className="muted">{registering ? 'Register as a resident.' : 'Sign in to your workspace.'}</p>
+        {error && <Notice text={error} />}
+        {registering && <>
+          <label>Full name<input name="full_name" value={form.full_name} onChange={update} required /></label>
+          <label>Roll number<input name="roll_number" value={form.roll_number} onChange={update} required /></label>
+          <label>Course<input name="course" value={form.course} onChange={update} required /></label>
+          <label>Academic year<select name="academic_year" value={form.academic_year} onChange={update}>{[1, 2, 3, 4].map(y => <option key={y} value={y}>Year {y}</option>)}</select></label>
+        </>}
+        <label>Email address<input name="email" type="email" placeholder="you@example.com" value={form.email} onChange={update} required /></label>
+        <label>Password<input name="password" type="password" placeholder="At least 8 characters" value={form.password} onChange={update} minLength="8" required /></label>
+        <button className="button primary full" disabled={loading}>{loading ? 'Please wait…' : registering ? 'Create account' : 'Sign in'}</button>
+        <button type="button" className="text-button auth-switch" onClick={() => { setMode(registering ? 'login' : 'register'); setError('') }}>
+          {registering ? 'Already have an account? Sign in' : 'New resident? Create an account'}
+        </button>
+      </form>
+    </div>
+  )
 }
+
 function Shell({ user, onLogout }) {
-  const [mobileOpen, setMobileOpen] = useState(false); const location = useLocation(); const title = navItems.find(item => item.to === location.pathname)?.label || 'Dashboard'
-  const role = user.role; const isAdmin = role === 'administrator'; const isMaintenance = role === 'maintenance_staff'
-  const visibleItems = isAdmin ? navItems : navItems.filter(item => ['/', '/complaints', '/fees'].includes(item.to) && !(isMaintenance && item.to === '/fees'))
-  const initials = user.full_name.split(' ').map(part => part[0]).join('').slice(0, 2).toUpperCase()
-  return <div className="app-shell"><aside className={`sidebar ${mobileOpen ? 'open' : ''}`}><div className="sidebar-top"><div className="brand-row"><div className="brand-mark">H</div><span>HostelHub</span></div><button className="icon-button mobile-close" onClick={() => setMobileOpen(false)}><X size={20} /></button></div><div className="workspace-switch"><div className="avatar">{initials}</div><div><strong>{isAdmin ? 'Admin workspace' : 'Resident workspace'}</strong><small>Central campus</small></div><ChevronRight size={15} /></div><nav>{visibleItems.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} end={to === '/'} onClick={() => setMobileOpen(false)}><Icon size={18} /><span>{label}</span></NavLink>)}</nav><div className="sidebar-footer">{isAdmin && <NavLink to="/settings"><Settings size={18} />Settings</NavLink>}<button className="logout-link" onClick={onLogout}><LogOut size={18} />Sign out</button><div className="user-row"><div className="avatar green">{initials}</div><div><strong>{user.full_name}</strong><small>{role.replace('_', ' ')}</small></div><MoreHorizontal size={17} /></div></div></aside><main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={22} /></button><div><div className="breadcrumb">Workspace <ChevronRight size={13} /> <strong>{title}</strong></div><h1>{title}</h1></div><div className="topbar-actions"><div className="avatar green">{initials}</div></div></header><div className="page-content"><Routes><Route path="/" element={<Dashboard user={user} />} /><Route path="/residents" element={isAdmin ? <DataPage type="residents" user={user} /> : <EmptyPage title="Resident profile" icon={Users} />} /><Route path="/rooms" element={isAdmin ? <DataPage type="rooms" user={user} /> : <Navigate to="/" replace />} /><Route path="/allocations" element={isAdmin ? <DataPage type="allocations" user={user} /> : <Navigate to="/" replace />} /><Route path="/complaints" element={<DataPage type="complaints" user={user} />} /><Route path="/fees" element={<DataPage type="fees" user={user} />} /><Route path="/reports" element={isAdmin ? <Reports /> : <Navigate to="/" replace />} /><Route path="/settings" element={isAdmin ? <EmptyPage title="Settings" icon={Settings} /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></div></main></div>
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const location = useLocation()
+  const items = ROLE_NAV[user.role] || ROLE_NAV.resident
+  const title = items.find(item => item.to === location.pathname)?.label || 'Dashboard'
+  const isAdmin = user.role === 'administrator'
+  const isResident = user.role === 'resident'
+  const initials = user.full_name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase()
+  const roleLabel = { administrator: 'Admin workspace', resident: 'Resident workspace', maintenance_staff: 'Maintenance workspace' }[user.role]
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
+        <div className="sidebar-top">
+          <div className="brand-row"><div className="brand-mark">H</div><span>HostelHub</span></div>
+          <button className="icon-button mobile-close" onClick={() => setMobileOpen(false)}><X size={20} /></button>
+        </div>
+        <div className="workspace-switch"><div className="avatar">{initials}</div><div><strong>{roleLabel}</strong><small>{pretty(user.role)}</small></div></div>
+        <nav>{items.map(({ to, label, icon: Icon }) => (
+          <NavLink key={to} to={to} end={to === '/'} onClick={() => setMobileOpen(false)}><Icon size={18} /><span>{label}</span></NavLink>
+        ))}</nav>
+        <div className="sidebar-footer">
+          <button className="logout-link" onClick={onLogout}><LogOut size={18} />Sign out</button>
+          <div className="user-row"><div className="avatar green">{initials}</div><div><strong>{user.full_name}</strong><small>{user.email}</small></div></div>
+        </div>
+      </aside>
+      <main className="main-content">
+        <header className="topbar">
+          <button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={22} /></button>
+          <div><div className="breadcrumb">Workspace <ChevronRight size={13} /> <strong>{title}</strong></div><h1>{title}</h1></div>
+          <div className="topbar-actions"><div className="avatar green">{initials}</div></div>
+        </header>
+        <div className="page-content">
+          <Routes>
+            <Route path="/" element={<Dashboard user={user} />} />
+            {isAdmin && <Route path="/residents" element={<DataPage type="residents" user={user} />} />}
+            {isAdmin && <Route path="/rooms" element={<DataPage type="rooms" user={user} />} />}
+            {isAdmin && <Route path="/allocations" element={<DataPage type="allocations" user={user} />} />}
+            <Route path="/complaints" element={<DataPage type="complaints" user={user} />} />
+            {(isAdmin || isResident) && <Route path="/fees" element={<DataPage type="fees" user={user} />} />}
+            {isAdmin && <Route path="/reports" element={<Reports />} />}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
+      </main>
+    </div>
+  )
 }
-function Dashboard({ user }) { const navigate = useNavigate(); const [stats, setStats] = useState(null); const [activity, setActivity] = useState([]); useEffect(() => { Promise.all([api.get('/api/dashboard/stats'), api.get('/api/dashboard/activity')]).then(([statsResponse, activityResponse]) => { setStats(statsResponse.data); setActivity(activityResponse.data) }).catch(() => {}) }, []); const liveStats = stats ? [{ label: 'Total Residents', value: stats.total_residents, delta: '', icon: Users, tone: 'teal' }, { label: 'Room Occupancy', value: `${stats.occupancy_percent}%`, delta: '', icon: BedDouble, tone: 'blue' }, { label: 'Open Complaints', value: stats.open_complaints, delta: '', icon: MessageSquare, tone: 'orange' }, { label: 'Pending Fees', value: `₹${Number(stats.outstanding_balance || 0).toLocaleString('en-IN')}`, delta: '', icon: CircleDollarSign, tone: 'purple' }] : dashboardData.stats; const complaintData = stats ? [{ name: 'Resolved', value: stats.resolved_complaints, color: '#0f766e' }, { name: 'In progress', value: stats.in_progress_complaints, color: '#f59e0b' }, { name: 'Open', value: Math.max(0, stats.open_complaints - stats.in_progress_complaints), color: '#e2e8f0' }] : dashboardData.complaints; return <><div className="welcome-row"><div><p className="eyebrow">SUNDAY, OCTOBER 18, 2026</p><h2>Good morning, {user.full_name.split(' ')[0]} <span>👋</span></h2><p className="muted">Here’s what’s happening across your hostels today.</p></div><button className="button primary" onClick={() => navigate('/allocations')}><Plus size={17} /> New allocation</button></div><div className="stats-grid">{liveStats.map(stat => <StatCard key={stat.label} {...stat} />)}</div><div className="dashboard-grid"><section className="panel chart-panel"><PanelHeader title="Occupancy overview" /><div className="chart-legend"><span><i className="dot teal" />Occupied</span><span><i className="dot pale" />Capacity</span></div><ResponsiveContainer width="100%" height={250}><AreaChart data={dashboardData.occupancy} margin={{ left: -20, right: 8, top: 12 }}><defs><linearGradient id="tealFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#0f766e" stopOpacity=".22" /><stop offset="100%" stopColor="#0f766e" stopOpacity="0" /></linearGradient></defs><CartesianGrid vertical={false} stroke="#eef2f3" /><XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} /><YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} tickFormatter={v => `${v}%`} /><Tooltip /><Area type="monotone" dataKey="capacity" stroke="#cbd5e1" strokeDasharray="4 4" fill="none" strokeWidth={2} /><Area type="monotone" dataKey="occupied" stroke="#0f766e" fill="url(#tealFill)" strokeWidth={3} /></AreaChart></ResponsiveContainer></section><section className="panel"><PanelHeader title="Complaint status" /><div className="donut-wrap"><ResponsiveContainer width="100%" height={190}><PieChart><Pie data={complaintData} dataKey="value" innerRadius={55} outerRadius={78} paddingAngle={3} stroke="none">{complaintData.map(item => <Cell key={item.name} fill={item.color} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer><div className="donut-center"><strong>{stats?.open_complaints ?? 0}</strong><span>Open</span></div></div><div className="status-list">{complaintData.map(item => <div key={item.name}><span><i className="dot" style={{ background: item.color }} />{item.name}</span><strong>{item.value}</strong></div>)}</div></section></div><div className="dashboard-grid lower"><section className="panel"><PanelHeader title="Recent activity" />{activity.length ? <div className="activity-list">{activity.map(item => <div className="activity-item" key={`${item.type}-${item.occurred_at}`}><div className="activity-icon teal"><ClipboardList size={16} /></div><div><strong>{item.title}</strong><p>{item.description}</p><small>{new Date(item.occurred_at).toLocaleString()}</small></div></div>)}</div> : <Activity />}</section><section className="panel"><PanelHeader title="Quick actions" /><div className="quick-actions">{[['Add resident', Users, '/residents'], ['Assign a bed', BedDouble, '/allocations'], ['Record payment', CircleDollarSign, '/fees'], ['Log complaint', MessageSquare, '/complaints']].map(([label, Icon, path]) => <button key={label} onClick={() => navigate(path)}><span className="quick-icon"><Icon size={18} /></span>{label}<ChevronRight size={16} /></button>)}</div></section></div></> }
-function StatCard({ label, value, delta, icon: Icon, tone }) { return <div className="stat-card"><div className={`stat-icon ${tone}`}><Icon size={20} /></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong>{delta ? <small className={delta.startsWith('-') ? 'down' : ''}>{delta.startsWith('-') ? <ArrowDownRight size={13} /> : <ArrowUpRight size={13} />} {delta} <em>vs last month</em></small> : <small>&nbsp;</small>}</div></div> }
-function PanelHeader({ title }) { return <div className="panel-header"><h3>{title}</h3></div> }
-function Activity() { return <div className="activity-list">{[['New allocation approved', 'Rahul Mehta was assigned to Room 203, Bed B', '12 min ago', BedDouble, 'teal'], ['Complaint status updated', 'Water leakage in Block A marked as in progress', '48 min ago', MessageSquare, 'orange'], ['Payment received', 'Nadia Ali paid the October accommodation fee', '2 hrs ago', CircleDollarSign, 'purple'], ['New resident added', 'Samuel Okoro joined Central campus', '4 hrs ago', Users, 'blue']].map(([title, description, time, Icon, tone]) => <div className="activity-item" key={title}><div className={`activity-icon ${tone}`}><Icon size={16} /></div><div><strong>{title}</strong><p>{description}</p><small>{time}</small></div></div>)}</div> }
-const pageConfig = {
-  residents: { title: 'Residents', singular: 'resident', endpoint: '/residents', icon: Users, columns: ['Resident', 'Student ID', 'Room', 'Status'], rows: [['Nadia Ali', 'ST-2024-001', 'B-203 / Bed A', 'Active'], ['Samuel Okoro', 'ST-2024-002', 'A-108 / Bed B', 'Active'], ['Emma Wilson', 'ST-2023-118', 'C-014 / Bed A', 'Active'], ['Daniel Kim', 'ST-2023-094', 'B-107 / Bed C', 'Pending']] },
-  rooms: { title: 'Rooms & Beds', singular: 'room', endpoint: '/rooms', icon: BedDouble, columns: ['Room', 'Hostel', 'Type', 'Capacity', 'Occupancy', 'Monthly fee', 'Status'], rows: [['A-108', 'Maple Hall', 'Double', '2 beds', '2 / 2', '₹420', 'Full'], ['B-203', 'Cedar House', 'Triple', '3 beds', '2 / 3', '₹420', 'Available'], ['C-014', 'Oak Residence', 'Single', '1 bed', '1 / 1', '₹420', 'Full'], ['B-107', 'Cedar House', 'Triple', '3 beds', '1 / 3', '₹420', 'Available']] },
-  allocations: { title: 'Allocations', singular: 'allocation', endpoint: '/allocations', icon: ClipboardList, columns: ['Resident', 'Room / Bed', 'Start date', 'End date', 'Monthly fee', 'Status'], rows: [['Nadia Ali', 'B-203 / A', 'Oct 12, 2026', 'Jun 30, 2027', '₹420', 'Active'], ['Samuel Okoro', 'A-108 / B', 'Oct 10, 2026', 'Jun 30, 2027', '₹420', 'Active'], ['Emma Wilson', 'C-014 / A', 'Sep 28, 2026', 'Jun 30, 2027', '₹420', 'Active'], ['Daniel Kim', 'B-107 / C', 'Sep 21, 2026', 'Jun 30, 2027', '₹420', 'Pending']] },
-  complaints: { title: 'Complaints', singular: 'complaint', endpoint: '/complaints', icon: MessageSquare, columns: ['Issue', 'Resident', 'Category', 'Priority', 'Status'], rows: [['Water leakage in Block A', 'Rahul Mehta', 'Maintenance', 'High', 'In progress'], ['Slow Wi-Fi in study room', 'Amina Yusuf', 'Facilities', 'Medium', 'New'], ['Room key replacement', 'Jon Bell', 'Access', 'Low', 'Resolved'], ['No hot water - Floor 2', 'Maria Chen', 'Maintenance', 'High', 'New']] },
-  fees: { title: 'Fees & Payments', singular: 'payment', endpoint: '/fees', icon: CircleDollarSign, columns: ['Resident', 'Invoice', 'Period', 'Amount', 'Due date', 'Status'], rows: [['Nadia Ali', 'INV-1028', 'October 2026', '₹420.00', 'Oct 05, 2026', 'Paid'], ['Samuel Okoro', 'INV-1027', 'October 2026', '₹420.00', 'Oct 05, 2026', 'Paid'], ['Emma Wilson', 'INV-0982', 'October 2026', '₹420.00', 'Oct 05, 2026', 'Pending'], ['Daniel Kim', 'INV-0978', 'October 2026', '₹420.00', 'Oct 05, 2026', 'Overdue']] },
+
+/* ------------------------------------------------------------ Dashboards ---- */
+function Dashboard({ user }) {
+  if (user.role === 'administrator') return <AdminDashboard user={user} />
+  if (user.role === 'resident') return <ResidentDashboard user={user} />
+  return <StaffDashboard user={user} />
 }
-function DataPage({ type, user }) { const config = pageConfig[type]; const [rows, setRows] = useState(config.rows); const [loading, setLoading] = useState(true); const [apiError, setApiError] = useState(''); const [query, setQuery] = useState(''); const [formOpen, setFormOpen] = useState(false); const refresh = () => getResource(config.endpoint, config.rows).then(result => { if (result.error) setApiError(result.error); if (Array.isArray(result.data)) setRows(result.data.map(item => Array.isArray(item) ? item : mapApiRow(type, item))); }); const remove = async id => { if (!window.confirm(`Remove this ${config.singular}? This cannot be undone.`)) return; const paths = { residents: `/api/residents/${id}`, allocations: `/api/allocations/${id}`, rooms: `/api/rooms/${id}`, complaints: `/api/complaints/${id}`, fees: `/api/invoices/${id}` }; try { await api.delete(paths[type]); await refresh() } catch (error) { setApiError(error.response?.data?.detail || 'This record could not be removed.') } }; const markPaid = async id => { if (!window.confirm('Mark this invoice as fully paid?')) return; try { await api.post(`/api/invoices/${id}/mark-paid`); await refresh() } catch (error) { setApiError(error.response?.data?.detail || 'Invoice could not be marked as paid.') } }; const removePayment = async id => { if (!window.confirm('Remove all payment records for this invoice and return it to unpaid?')) return; try { await api.post(`/api/invoices/${id}/remove-payment`); await refresh() } catch (error) { setApiError(error.response?.data?.detail || 'Payment status could not be removed.') } }; useEffect(() => { let active = true; getResource(config.endpoint, config.rows).then(result => { if (!active) return; if (result.error) setApiError(result.error); if (Array.isArray(result.data)) setRows(result.data.map(item => Array.isArray(item) ? item : mapApiRow(type, item))); }).finally(() => active && setLoading(false)); return () => { active = false } }, [config.endpoint, type]); const filtered = useMemo(() => rows.filter(row => row.join(' ').toLowerCase().includes(query.toLowerCase())), [rows, query]); const canAdd = user.role === 'administrator' || type === 'complaints' || type === 'fees'; const canDelete = user.role === 'administrator' && ['residents', 'allocations', 'rooms', 'complaints', 'fees'].includes(type); const canMarkPaid = user.role === 'administrator' && type === 'fees'; return <><div className="page-intro"><div><p className="eyebrow">{config.title === 'Complaints' ? 'TRACK & RESOLVE' : 'DIRECTORY'}</p><h2>{config.title}</h2><p className="muted">{user.role === 'resident' && type === 'fees' ? 'View your invoices and pay outstanding fees securely.' : `Manage and monitor ${config.title.toLowerCase()} across all hostel buildings.`}</p></div>{canAdd && <button className="button primary" onClick={() => setFormOpen(true)}><Plus size={17} /> {user.role === 'resident' && type === 'fees' ? 'Pay fee' : `Add ${config.singular}`}</button>}</div>{apiError && <Notice type="info" text={apiError} />}{formOpen && <RecordForm type={type} user={user} onClose={() => setFormOpen(false)} onSaved={() => { setFormOpen(false); refresh() }} />}<div className="toolbar"><div className="search-input"><Search size={17} /><input placeholder={`Search ${config.title.toLowerCase()}...`} value={query} onChange={e => setQuery(e.target.value)} /></div></div><div className="panel table-panel">{loading ? <LoadingState /> : filtered.length ? <Table columns={config.columns} rows={filtered} type={type} onDelete={canDelete ? remove : null} onMarkPaid={canMarkPaid ? markPaid : null} onRemovePayment={canMarkPaid ? removePayment : null} /> : <EmptyPage title={`No ${config.title.toLowerCase()} found`} icon={config.icon} compact />}</div></> }
+
+function Welcome({ user, children }) {
+  const hour = new Date().getHours()
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
+  return (
+    <div>
+      <p className="eyebrow">{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).toUpperCase()}</p>
+      <h2>{greeting}, {user.full_name.split(' ')[0]}</h2>
+      <p className="muted">{children}</p>
+    </div>
+  )
+}
+
+function useLoad(loader, deps = []) {
+  const [state, setState] = useState({ data: null, error: '', loading: true })
+  useEffect(() => {
+    let active = true
+    setState(s => ({ ...s, loading: true }))
+    loader().then(data => active && setState({ data, error: '', loading: false }))
+      .catch(err => active && setState({ data: null, error: errorText(err, 'Could not load data.'), loading: false }))
+    return () => { active = false }
+  }, deps) // eslint-disable-line react-hooks/exhaustive-deps
+  return state
+}
+
+function AdminDashboard({ user }) {
+  const navigate = useNavigate()
+  const { data, error, loading } = useLoad(async () => {
+    const [stats, activity, occupancy] = await Promise.all([api.get('/api/dashboard/stats'), api.get('/api/dashboard/activity'), api.get('/api/reports/occupancy')])
+    return { stats: stats.data, activity: activity.data, occupancy: occupancy.data }
+  })
+  if (loading) return <LoadingState />
+  if (error) return <Notice text={error} />
+  const { stats, activity, occupancy } = data
+  const cards = [
+    { label: 'Total Residents', value: stats.total_residents, icon: Users, tone: 'teal' },
+    { label: 'Room Occupancy', value: `${stats.occupancy_percent}%`, icon: BedDouble, tone: 'blue' },
+    { label: 'Open Complaints', value: stats.open_complaints, icon: MessageSquare, tone: 'orange' },
+    { label: 'Pending Fees', value: inr(stats.outstanding_balance), icon: CircleDollarSign, tone: 'purple' },
+  ]
+  const complaintData = [
+    { name: 'Resolved', value: stats.resolved_complaints, color: '#0f766e' },
+    { name: 'In progress', value: stats.in_progress_complaints, color: '#f59e0b' },
+    { name: 'Open', value: Math.max(0, stats.open_complaints - stats.in_progress_complaints), color: '#cbd5e1' },
+  ]
+  return <>
+    <div className="welcome-row">
+      <Welcome user={user}>Here’s what’s happening across your hostels today.</Welcome>
+      <button className="button primary" onClick={() => navigate('/allocations')}><Plus size={17} /> New allocation</button>
+    </div>
+    <div className="stats-grid">{cards.map(c => <StatCard key={c.label} {...c} />)}</div>
+    <div className="dashboard-grid">
+      <section className="panel">
+        <PanelHeader title="Occupancy by hostel" />
+        {occupancy.length ? (
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={occupancy.map(o => ({ hostel: o.hostel, occupied: Number(o.occupied_beds), free: Number(o.available_beds) }))} margin={{ left: -20, right: 8, top: 12 }}>
+              <CartesianGrid vertical={false} stroke="#eef2f3" />
+              <XAxis dataKey="hostel" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+              <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+              <Tooltip />
+              <Bar dataKey="occupied" name="Occupied beds" fill="#0f766e" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="free" name="Free beds" fill="#cbd5e1" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : <EmptyPage title="No hostels yet" icon={BedDouble} compact />}
+      </section>
+      <section className="panel">
+        <PanelHeader title="Complaint status" />
+        <div className="donut-wrap">
+          <ResponsiveContainer width="100%" height={190}>
+            <PieChart><Pie data={complaintData} dataKey="value" innerRadius={55} outerRadius={78} paddingAngle={3} stroke="none">{complaintData.map(i => <Cell key={i.name} fill={i.color} />)}</Pie><Tooltip /></PieChart>
+          </ResponsiveContainer>
+          <div className="donut-center"><strong>{stats.open_complaints}</strong><span>Open</span></div>
+        </div>
+        <div className="status-list">{complaintData.map(i => <div key={i.name}><span><i className="dot" style={{ background: i.color }} />{i.name}</span><strong>{i.value}</strong></div>)}</div>
+      </section>
+    </div>
+    <div className="dashboard-grid lower">
+      <section className="panel">
+        <PanelHeader title="Recent activity" />
+        {activity.length ? <div className="activity-list">{activity.map((item, i) => (
+          <div className="activity-item" key={`${item.type}-${item.occurred_at}-${i}`}>
+            <div className="activity-icon teal"><ClipboardList size={16} /></div>
+            <div><strong>{item.title}</strong><p>{pretty(item.description)}</p><small>{new Date(item.occurred_at).toLocaleString('en-IN')}</small></div>
+          </div>))}</div> : <p className="muted">No activity yet.</p>}
+      </section>
+      <section className="panel">
+        <PanelHeader title="Quick actions" />
+        <QuickActions actions={[['Add resident', Users, '/residents'], ['Assign a bed', BedDouble, '/allocations'], ['Record payment', CircleDollarSign, '/fees'], ['Review complaints', MessageSquare, '/complaints']]} />
+      </section>
+    </div>
+  </>
+}
+
+function ResidentDashboard({ user }) {
+  const navigate = useNavigate()
+  const [refresh, setRefresh] = useState(0)
+  const { data, error, loading } = useLoad(async () => {
+    const [me, notes] = await Promise.all([api.get('/api/dashboard/me'), api.get('/api/notifications')])
+    return { me: me.data, notes: notes.data }
+  }, [refresh])
+  if (loading) return <LoadingState />
+  if (error) return <Notice text={error} />
+  const { me, notes } = data
+  const a = me.allocation
+  const cards = [
+    { label: 'My Room', value: a ? `${a.room_number} / ${a.bed_number}` : 'Not allocated', icon: BedDouble, tone: 'blue' },
+    { label: 'Fees Due', value: inr(me.outstanding_balance), icon: CircleDollarSign, tone: 'purple' },
+    { label: 'Open Complaints', value: me.open_complaints, icon: MessageSquare, tone: 'orange' },
+    { label: 'Resolved', value: me.resolved_complaints, icon: CheckCircle2, tone: 'teal' },
+  ]
+  const markRead = async note => { if (note.is_read) return; try { await api.patch(`/api/notifications/${note.id}/read`); setRefresh(n => n + 1) } catch { /* ignore */ } }
+  return <>
+    <div className="welcome-row">
+      <Welcome user={user}>{a ? `${a.hostel}, Room ${a.room_number}, Bed ${a.bed_number} · ${inr(a.monthly_amount)}/month · until ${fmtDate(a.end_date)}` : 'You have no bed allocated yet. The hostel office will assign one soon.'}</Welcome>
+      <button className="button primary" onClick={() => navigate('/complaints')}><Plus size={17} /> Log complaint</button>
+    </div>
+    <div className="stats-grid">{cards.map(c => <StatCard key={c.label} {...c} />)}</div>
+    <div className="dashboard-grid lower">
+      <section className="panel">
+        <PanelHeader title="My recent complaints" />
+        {me.recent_complaints.length ? <div className="activity-list">{me.recent_complaints.map(c => (
+          <div className="activity-item" key={c.id}>
+            <div className="activity-icon orange"><MessageSquare size={16} /></div>
+            <div style={{ flex: 1 }}><strong>{c.subject}</strong><p>{pretty(c.category)} · {c.priority} priority</p><small>{fmtDate(c.submitted_at)}</small></div>
+            <span className={`badge ${badgeClass(c.status)}`}>{pretty(c.status)}</span>
+          </div>))}</div> : <p className="muted">You haven’t filed any complaints.</p>}
+      </section>
+      <section className="panel">
+        <PanelHeader title="Notifications" />
+        {notes.length ? <div className="activity-list">{notes.slice(0, 6).map(n => (
+          <div className="activity-item clickable" key={n.id} onClick={() => markRead(n)} title={n.is_read ? '' : 'Click to mark as read'}>
+            <div className={`activity-icon ${n.is_read ? 'blue' : 'orange'}`}><AlertCircle size={16} /></div>
+            <div><strong>{n.title}{!n.is_read && <span className="unread-dot" />}</strong><p>{n.message}</p><small>{new Date(n.created_at).toLocaleString('en-IN')}</small></div>
+          </div>))}</div> : <p className="muted">No notifications.</p>}
+        <div style={{ marginTop: 16 }}><QuickActions actions={[['Pay fees', CircleDollarSign, '/fees'], ['Log a complaint', MessageSquare, '/complaints']]} /></div>
+      </section>
+    </div>
+  </>
+}
+
+function StaffDashboard({ user }) {
+  const navigate = useNavigate()
+  const { data, error, loading } = useLoad(async () => (await api.get('/api/dashboard/me')).data)
+  if (loading) return <LoadingState />
+  if (error) return <Notice text={error} />
+  const cards = [
+    { label: 'Assigned to me', value: data.assigned_to_me, icon: ClipboardList, tone: 'blue' },
+    { label: 'In progress', value: data.in_progress, icon: Wrench, tone: 'orange' },
+    { label: 'Waiting for someone', value: data.unassigned_open, icon: MessageSquare, tone: 'purple' },
+    { label: 'Resolved by me', value: data.resolved_by_me, icon: CheckCircle2, tone: 'teal' },
+  ]
+  return <>
+    <div className="welcome-row">
+      <Welcome user={user}>Here’s your maintenance queue. Take a new job or keep your current ones moving.</Welcome>
+      <button className="button primary" onClick={() => navigate('/complaints')}>Open complaint queue</button>
+    </div>
+    <div className="stats-grid">{cards.map(c => <StatCard key={c.label} {...c} />)}</div>
+    <section className="panel">
+      <PanelHeader title="Up next" />
+      {data.queue.length ? <div className="activity-list">{data.queue.map(c => (
+        <div className="activity-item" key={c.id}>
+          <div className="activity-icon orange"><Wrench size={16} /></div>
+          <div style={{ flex: 1 }}><strong>{c.subject}</strong><p>{c.resident_name} · {pretty(c.category)} · {c.priority} priority</p></div>
+          <span className={`badge ${badgeClass(c.status)}`}>{pretty(c.status)}</span>
+        </div>))}</div> : <p className="muted">Nothing in your queue. Nice.</p>}
+    </section>
+  </>
+}
+
+const QuickActions = ({ actions }) => {
+  const navigate = useNavigate()
+  return <div className="quick-actions">{actions.map(([label, Icon, path]) => (
+    <button key={label} onClick={() => navigate(path)}><span className="quick-icon"><Icon size={18} /></span>{label}<ChevronRight size={16} /></button>))}</div>
+}
+function StatCard({ label, value, icon: Icon, tone }) {
+  return <div className="stat-card"><div className={`stat-icon ${tone}`}><Icon size={20} /></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong></div></div>
+}
+const PanelHeader = ({ title }) => <div className="panel-header"><h3>{title}</h3></div>
+
+/* ------------------------------------------------------------- Data pages ---- */
+const badgeClass = value => String(value).toLowerCase().replace(/[ _]/g, '-')
+
+// Each page: how to load rows, which columns to show, and how a record becomes table cells.
+const pages = {
+  residents: {
+    title: 'Residents', singular: 'resident', endpoint: '/api/residents', icon: Users,
+    columns: ['Resident', 'Roll no.', 'Course', 'Current bed', 'Eligibility'],
+    cells: r => [r.full_name, r.roll_number, `${r.course} (Y${r.academic_year})`, r.allocation || 'Unassigned', r.eligibility_status],
+    statusCol: 4,
+  },
+  rooms: {
+    title: 'Rooms & Beds', singular: 'room', endpoint: '/api/rooms', icon: BedDouble,
+    columns: ['Room', 'Hostel', 'Type', 'Beds', 'Occupied', 'Monthly fee', 'Availability'],
+    cells: r => [r.room_number, r.hostel, r.room_type, r.beds, `${r.occupied_beds} / ${r.beds}`, inr(r.monthly_amount), Number(r.available_beds) ? 'available' : 'full'],
+    statusCol: 6, plainFirst: true,
+  },
+  allocations: {
+    title: 'Allocations', singular: 'allocation', endpoint: '/api/allocations', icon: ClipboardList,
+    columns: ['Resident', 'Hostel / Room / Bed', 'Start', 'End', 'Monthly fee', 'Status'],
+    cells: r => [r.resident_name, `${r.hostel} / ${r.room_number} / ${r.bed_number}`, fmtDate(r.start_date), fmtDate(r.end_date), inr(r.monthly_amount), r.status],
+    statusCol: 5,
+  },
+  complaints: {
+    title: 'Complaints', singular: 'complaint', endpoint: '/api/complaints', icon: MessageSquare,
+    columns: ['Issue', 'Resident', 'Category', 'Priority', 'Status', 'Assigned to'],
+    cells: r => [r.subject, r.resident_name, pretty(r.category), r.priority, r.status, r.assigned_name || '—'],
+    statusCol: 4, priorityCol: 3,
+  },
+  fees: {
+    title: 'Fees & Payments', singular: 'payment', endpoint: '/api/invoices', icon: CircleDollarSign,
+    columns: ['Resident', 'Invoice', 'Period', 'Amount', 'Outstanding', 'Due date', 'Status'],
+    cells: r => [r.resident_name, `INV-${r.id}`, r.fee_period, inr(r.amount_due), inr(r.outstanding), fmtDate(r.due_date), r.status],
+    statusCol: 6,
+  },
+}
+
+function DataPage({ type, user }) {
+  const config = pages[type]
+  const isAdmin = user.role === 'administrator'
+  const isResident = user.role === 'resident'
+  const isStaff = user.role === 'maintenance_staff'
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [query, setQuery] = useState('')
+  const [formOpen, setFormOpen] = useState(false)
+  const [transfer, setTransfer] = useState(null)
+  const [staff, setStaff] = useState([])
+
+  const load = async () => {
+    try { const { data } = await api.get(config.endpoint); setRows(data); setError('') }
+    catch (err) { setRows([]); setError(errorText(err, 'Could not load records.')) }
+  }
+  useEffect(() => { setLoading(true); setFormOpen(false); setTransfer(null); setSuccess(''); load().finally(() => setLoading(false)) }, [type]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (type === 'complaints' && isAdmin) api.get('/api/staff').then(r => setStaff(r.data)).catch(() => {}) }, [type, isAdmin])
+
+  // Runs an API action, then refreshes the table and shows the outcome.
+  const run = async (action, okMessage) => {
+    setError(''); setSuccess('')
+    try { const res = await action(); await load(); setSuccess(typeof okMessage === 'function' ? okMessage(res.data) : okMessage) }
+    catch (err) { setError(errorText(err)) }
+  }
+  const confirmRun = (question, action, okMessage) => { if (window.confirm(question)) run(action, okMessage) }
+
+  const filtered = useMemo(() => rows.filter(r => config.cells(r).join(' ').toLowerCase().includes(query.toLowerCase())), [rows, query, config])
+  const canAdd = (isAdmin && type !== 'complaints') || (type === 'complaints' && !isStaff) || (isAdmin && type === 'complaints') || (isResident && type === 'fees')
+  const addLabel = type === 'fees' ? 'Record payment' : `Add ${config.singular}`
+
+  const actionsFor = row => {
+    const buttons = []
+    const btn = (label, onClick, key) => <button key={key || label} className="button secondary" onClick={onClick}>{label}</button>
+    if (type === 'residents' && isAdmin) {
+      if (row.eligibility_status !== 'eligible') buttons.push(btn('Mark eligible', () => run(() => api.patch(`/api/residents/${row.id}/eligibility`, { eligibility_status: 'eligible' }), 'Resident marked eligible.')))
+      else buttons.push(btn('Mark ineligible', () => run(() => api.patch(`/api/residents/${row.id}/eligibility`, { eligibility_status: 'ineligible' }), 'Resident marked ineligible.')))
+      buttons.push(btn('Remove', () => confirmRun(`Remove ${row.full_name}? Their bed is released and login disabled; fee history is kept.`, () => api.delete(`/api/residents/${row.id}`), 'Resident removed.')))
+    }
+    if (type === 'rooms' && isAdmin) buttons.push(btn('Delete', () => confirmRun(`Delete room ${row.room_number} and all its beds? This cannot be undone.`, () => api.delete(`/api/rooms/${row.id}`), 'Room deleted.')))
+    if (type === 'allocations' && isAdmin && row.status === 'active') {
+      buttons.push(btn('Transfer', () => { setTransfer(row); setFormOpen(false) }))
+      buttons.push(btn('Cancel', () => confirmRun(`Cancel the allocation for ${row.resident_name}?`, () => api.delete(`/api/allocations/${row.id}`), 'Allocation cancelled.')))
+    }
+    if (type === 'complaints' && (isAdmin || isStaff)) {
+      const step = to => run(() => api.patch(`/api/complaints/${row.id}`, { status: to }), `Complaint moved to ${pretty(to)}.`)
+      const mine = isAdmin || row.assigned_to === user.id
+      if (row.status === 'open') buttons.push(isAdmin ? <AssignControl key="assign" staff={staff} onAssign={staffId => run(() => api.patch(`/api/complaints/${row.id}`, { status: 'assigned', assigned_to: staffId }), 'Complaint assigned.')} /> : btn('Take this job', () => step('assigned')))
+      if (row.status === 'assigned' && mine) buttons.push(btn('Start work', () => step('in_progress')))
+      if (row.status === 'in_progress' && mine) buttons.push(btn('Mark resolved', () => { const remark = window.prompt('Resolution note (optional):') ; if (remark === null) return; run(() => api.patch(`/api/complaints/${row.id}`, { status: 'resolved', remark: remark || null }), 'Complaint resolved.') }))
+      if (row.status === 'resolved' && mine) buttons.push(btn('Close', () => step('closed')))
+      if (isAdmin) buttons.push(btn('Delete', () => confirmRun('Delete this complaint and its history?', () => api.delete(`/api/complaints/${row.id}`), 'Complaint deleted.')))
+    }
+    if (type === 'fees' && isAdmin) {
+      const paid = ['paid', 'partially_paid'].includes(row.status) || Number(row.paid) > 0
+      if (Number(row.outstanding) > 0) buttons.push(btn('Mark as paid', () => confirmRun('Mark this invoice as fully paid?', () => api.post(`/api/invoices/${row.id}/mark-paid`), 'Invoice marked as paid.')))
+      if (paid) buttons.push(btn('Remove payments', () => confirmRun('Remove all payments for this invoice and set it back to unpaid?', () => api.post(`/api/invoices/${row.id}/remove-payment`), 'Payments removed.')))
+      buttons.push(btn('Delete', () => confirmRun('Delete this invoice?', () => api.delete(`/api/invoices/${row.id}`), 'Invoice deleted.')))
+    }
+    return buttons
+  }
+
+  const intro = isResident && type === 'fees' ? 'View your invoices and pay what’s outstanding.'
+    : isResident && type === 'complaints' ? 'Report a problem and follow it until it’s fixed.'
+    : isStaff ? 'Take open jobs and move your assigned complaints forward.'
+    : `Manage and monitor ${config.title.toLowerCase()} across all hostel buildings.`
+
+  return <>
+    <div className="page-intro">
+      <div><p className="eyebrow">{type === 'complaints' ? 'TRACK & RESOLVE' : 'DIRECTORY'}</p><h2>{config.title}</h2><p className="muted">{intro}</p></div>
+      <div className="row-actions">
+        {isAdmin && type === 'allocations' && <button className="button secondary" onClick={() => confirmRun('Give every eligible, unallocated resident the next free bed?', () => api.post('/api/allocations/auto-assign'), d => `Auto-assigned ${d.assigned} resident(s)${d.waiting ? `; ${d.waiting} still waiting for a free bed` : ''}.`)}>Auto-assign waiting residents</button>}
+        {isAdmin && type === 'fees' && <button className="button secondary" onClick={() => run(() => api.post('/api/invoices/generate'), d => `${d.created} new invoice(s) created for ${d.period}.`)}>Generate this month’s invoices</button>}
+        {canAdd && <button className="button primary" onClick={() => { setFormOpen(true); setTransfer(null) }}><Plus size={17} /> {addLabel}</button>}
+      </div>
+    </div>
+    {error && <Notice text={error} />}
+    {success && <Notice text={success} type="success" />}
+    {formOpen && <RecordForm type={type} user={user} onClose={() => setFormOpen(false)} onSaved={msg => { setFormOpen(false); setSuccess(msg); load() }} />}
+    {transfer && <TransferForm allocation={transfer} onClose={() => setTransfer(null)} onSaved={() => { setTransfer(null); setSuccess('Resident transferred.'); load() }} />}
+    <div className="toolbar"><div className="search-input"><Search size={17} /><input placeholder={`Search ${config.title.toLowerCase()}...`} value={query} onChange={e => setQuery(e.target.value)} /></div></div>
+    <div className="panel table-panel">
+      {loading ? <LoadingState /> : filtered.length ? (
+        <div className="table-wrap"><table>
+          <thead><tr>{config.columns.map(c => <th key={c}>{c}</th>)}<th>Actions</th></tr></thead>
+          <tbody>{filtered.map(row => {
+            const cells = config.cells(row); const actions = actionsFor(row)
+            return <tr key={row.id}>
+              {cells.map((cell, i) => <td key={i}>{
+                i === 0 && !config.plainFirst ? <div className="person-cell"><div className="avatar small">{String(cell).split(' ').map(n => n[0]).join('').slice(0, 2)}</div><strong>{cell}</strong></div>
+                  : i === config.statusCol || i === config.priorityCol ? <span className={`badge ${badgeClass(cell)}`}>{pretty(cell)}</span> : cell}</td>)}
+              <td><div className="row-actions">{actions.length ? actions : <span className="muted">—</span>}</div></td>
+            </tr>
+          })}</tbody>
+        </table></div>
+      ) : <EmptyPage title={`No ${config.title.toLowerCase()} found`} icon={config.icon} compact />}
+    </div>
+  </>
+}
+
+function AssignControl({ staff, onAssign }) {
+  const [staffId, setStaffId] = useState('')
+  if (!staff.length) return <span className="muted">No maintenance staff</span>
+  return <>
+    <select className="mini-select" value={staffId} onChange={e => setStaffId(e.target.value)}><option value="">Assign to…</option>{staff.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>
+    <button className="button secondary" disabled={!staffId} onClick={() => onAssign(Number(staffId))}>Assign</button>
+  </>
+}
+
+function TransferForm({ allocation, onClose, onSaved }) {
+  const [beds, setBeds] = useState([])
+  const [form, setForm] = useState({ destination_bed_id: '', reason: '' })
+  const [error, setError] = useState('')
+  useEffect(() => { api.get('/api/beds').then(r => setBeds(r.data.filter(b => b.available_for_allocation))).catch(e => setError(errorText(e))) }, [])
+  const submit = async e => {
+    e.preventDefault(); setError('')
+    try { await api.post(`/api/allocations/${allocation.id}/transfer`, { destination_bed_id: Number(form.destination_bed_id), reason: form.reason }); onSaved() }
+    catch (err) { setError(errorText(err)) }
+  }
+  return <div className="panel form-panel">
+    <div className="panel-header"><h3>Transfer {allocation.resident_name}</h3><button className="text-button" onClick={onClose}>Cancel</button></div>
+    {error && <Notice text={error} />}
+    <form className="record-form" onSubmit={submit}>
+      <label>New bed<select value={form.destination_bed_id} onChange={e => setForm({ ...form, destination_bed_id: e.target.value })} required><option value="">Select a free bed</option>{beds.map(b => <option key={b.id} value={b.id}>{b.hostel} / {b.room_number} / {b.bed_number} · {inr(b.monthly_amount)}</option>)}</select></label>
+      <label>Reason<input value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} required maxLength={500} /></label>
+      <button className="button primary">Transfer resident</button>
+    </form>
+  </div>
+}
+
 function RecordForm({ type, user, onClose, onSaved }) {
-  const [form, setForm] = useState({}); const [options, setOptions] = useState({ residents: [], beds: [], hostels: [], invoices: [] }); const [error, setError] = useState(''); const [saving, setSaving] = useState(false)
-  useEffect(() => { if (!['allocations', 'complaints', 'fees', 'rooms'].includes(type)) return; Promise.allSettled([api.get('/residents'), api.get('/beds'), api.get('/api/hostels'), api.get('/fees')]).then(results => { const [residents, beds, hostels, invoices] = results; setOptions({ residents: residents.status === 'fulfilled' ? residents.value.data || [] : [], beds: beds.status === 'fulfilled' ? beds.value.data || [] : [], hostels: hostels.status === 'fulfilled' ? hostels.value.data || [] : [], invoices: invoices.status === 'fulfilled' ? invoices.value.data || [] : [] }); const failed = results.some(result => result.status === 'rejected'); if (failed) setError('Some form options could not be loaded. Refresh and try again.') }) }, [type])
-  const field = (name, label, extra = {}) => <label>{label}<input name={name} value={form[name] || ''} onChange={e => setForm({ ...form, [name]: e.target.value })} required {...extra} /></label>
-  const submit = async event => { event.preventDefault(); setSaving(true); setError(''); try {
-    let path; let payload = { ...form }
-    if (type === 'residents') { path = '/api/residents'; payload.academic_year = Number(payload.academic_year) }
-    if (type === 'rooms') { path = '/api/rooms'; payload.hostel_id = Number(payload.hostel_id); payload.floor = Number(payload.floor); payload.bed_count = Number(payload.bed_count) }
-    if (type === 'allocations') { path = '/api/allocations'; payload.resident_id = Number(payload.resident_id); payload.bed_id = Number(payload.bed_id) }
-    if (type === 'complaints') { path = '/api/complaints'; payload.resident_id = user.role === 'resident' ? user.resident_id : Number(payload.resident_id); if (payload.room_id) payload.room_id = Number(payload.room_id); if (payload.bed_id) payload.bed_id = Number(payload.bed_id) }
-    if (type === 'fees') { const invoice = options.invoices.find(item => String(item.id) === String(payload.invoice_id)); path = `/api/invoices/${payload.invoice_id}/payments`; payload = { amount: Number(payload.amount), transaction_password: payload.transaction_password }; if (!invoice) throw new Error('Select an invoice') }
-    await api.post(path, payload); onSaved()
-  } catch (err) { setError(err.response?.status === 401 ? 'Your session has expired or you do not have administrator permission. Please sign in again.' : err.response?.data?.detail || err.message || 'Could not save this record.') } finally { setSaving(false) } }
-  return <div className="panel form-panel"><div className="panel-header"><h3>{type === 'fees' ? 'Record fee payment' : `Add ${pageConfig[type].singular}`}</h3><button className="text-button" onClick={onClose}>Cancel</button></div>{error && <Notice text={error} /> }<form className="record-form" onSubmit={submit}>
-    {type === 'residents' && <>{field('full_name', 'Full name')}{field('roll_number', 'Roll number')}{field('email', 'Email', { type: 'email' })}{field('course', 'Course')}{field('academic_year', 'Academic year', { type: 'number', min: 1, max: 8 })}{field('phone', 'Phone')}</>}
-    {type === 'rooms' && <>{<label>Hostel<select name="hostel_id" value={form.hostel_id || ''} onChange={e => setForm({ ...form, hostel_id: e.target.value })} required><option value="">Select hostel</option>{options.hostels.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{field('room_number', 'Room number')}{field('floor', 'Floor', { type: 'number', min: 0 })}{field('room_type', 'Room type')}{field('monthly_amount', 'Room monthly amount (₹)', { type: 'number', min: 0, step: '0.01' })}{field('bed_number', 'First bed number')}{field('bed_count', 'Number of beds', { type: 'number', min: 1, max: 100 })}{field('bed_amount', 'Monthly amount per bed (₹)', { type: 'number', min: 0, step: '0.01' })}</>}
-    {type === 'allocations' && <><label>Eligible resident<select name="resident_id" value={form.resident_id || ''} onChange={e => setForm({ ...form, resident_id: e.target.value })} required><option value="">Select eligible resident</option>{options.residents.filter(item => item.eligibility_status === 'eligible' && !item.allocation_status).map(item => <option key={item.id} value={item.id}>{item.full_name} · {item.roll_number}</option>)}</select></label><label>Available bed<select name="bed_id" value={form.bed_id || ''} onChange={e => setForm({ ...form, bed_id: e.target.value })} required><option value="">Select bed</option>{options.beds.filter(item => item.available_for_allocation === 1 || item.available_for_allocation === true || (item.status === 'available' && !item.resident_id)).map(item => <option key={item.id} value={item.id}>{item.hostel} / {item.room_number} / {item.bed_number} · ₹{item.monthly_amount || 0}</option>)}</select></label>{field('start_date', 'Start date', { type: 'date' })}</>}
-    {type === 'complaints' && <>{user.role === 'administrator' && <label>Resident<select name="resident_id" value={form.resident_id || ''} onChange={e => setForm({ ...form, resident_id: e.target.value })} required><option value="">Select resident</option>{options.residents.map(item => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>}<label>Category<select name="category" value={form.category || ''} onChange={e => setForm({ ...form, category: e.target.value })} required><option value="">Select category</option><option value="electrical">Electrical</option><option value="plumbing">Plumbing</option><option value="cleaning">Cleaning</option><option value="furniture">Furniture</option><option value="internet">Internet</option><option value="security">Security</option><option value="other">Other</option></select></label>{field('subject', 'Subject')}{field('description', 'Description')}{<label>Priority<select name="priority" value={form.priority || 'medium'} onChange={e => setForm({ ...form, priority: e.target.value })}><option>low</option><option>medium</option><option>high</option><option>urgent</option></select></label>}</>}
-    {type === 'fees' && <><label>Invoice<select name="invoice_id" value={form.invoice_id || ''} onChange={e => setForm({ ...form, invoice_id: e.target.value })} required><option value="">Select invoice</option>{options.invoices.filter(item => Number(item.outstanding) > 0).map(item => <option key={item.id} value={item.id}>INV-{item.id} · {item.fee_period} · outstanding {item.outstanding}</option>)}</select></label>{field('amount', 'Amount', { type: 'number', min: 0.01, step: '0.01' })}{field('transaction_password', 'Transaction password', { type: 'password' })}</>}
-    <button className="button primary" disabled={saving}>{saving ? 'Saving…' : 'Save to database'}</button>
-  </form></div>
+  const isAdmin = user.role === 'administrator'
+  const [form, setForm] = useState(type === 'rooms' ? { room_type: 'double', bed_count: 1 } : {})
+  const [opts, setOpts] = useState({ residents: [], beds: [], hostels: [], invoices: [] })
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    const wanted = {
+      allocations: { residents: '/api/residents', beds: '/api/beds' },
+      rooms: { hostels: '/api/hostels' },
+      complaints: isAdmin ? { residents: '/api/residents' } : {},
+      fees: { invoices: '/api/invoices' },
+    }[type] || {}
+    Object.entries(wanted).forEach(([key, path]) => api.get(path).then(r => setOpts(o => ({ ...o, [key]: r.data }))).catch(e => setError(errorText(e, 'Could not load form options.'))))
+  }, [type, isAdmin])
+
+  const set = (name, value) => setForm(f => ({ ...f, [name]: value }))
+  const field = (name, label, extra = {}) => <label>{label}<input name={name} value={form[name] ?? ''} onChange={e => set(name, e.target.value)} required {...extra} /></label>
+  const select = (name, label, options, placeholder, extra = {}) => (
+    <label>{label}<select name={name} value={form[name] ?? ''} onChange={e => set(name, e.target.value)} required {...extra}><option value="">{placeholder}</option>{options}</select></label>)
+
+  const submit = async e => {
+    e.preventDefault(); setSaving(true); setError('')
+    try {
+      const f = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== '' && v != null))
+      let res, message
+      if (type === 'residents') { res = await api.post('/api/residents', { ...f, academic_year: Number(f.academic_year) }); message = 'Resident added.' }
+      if (type === 'rooms') {
+        res = await api.post('/api/rooms', { ...f, hostel_id: Number(f.hostel_id), floor: Number(f.floor), bed_count: Number(f.bed_count || 1), monthly_amount: Number(f.monthly_amount), ...(f.bed_amount ? { bed_amount: Number(f.bed_amount) } : {}) })
+        message = 'Room added.'
+      }
+      if (type === 'allocations') { res = await api.post('/api/allocations', { resident_id: Number(f.resident_id), bed_id: Number(f.bed_id), start_date: f.start_date }); message = 'Bed allocated.' }
+      if (type === 'complaints') { res = await api.post('/api/complaints', { ...f, resident_id: isAdmin ? Number(f.resident_id) : user.resident_id, priority: f.priority || 'medium' }); message = 'Complaint submitted.' }
+      if (type === 'fees') { res = await api.post(`/api/invoices/${f.invoice_id}/payments`, { amount: Number(f.amount), transaction_password: f.transaction_password }); message = `Payment recorded (${res.data.payment_reference}).` }
+      onSaved(message)
+    } catch (err) { setError(errorText(err, 'Could not save this record.')) } finally { setSaving(false) }
+  }
+
+  const payable = opts.invoices.filter(i => Number(i.outstanding) > 0)
+  return <div className="panel form-panel">
+    <div className="panel-header"><h3>{type === 'fees' ? 'Record fee payment' : `Add ${pages[type].singular}`}</h3><button className="text-button" onClick={onClose}>Cancel</button></div>
+    {error && <Notice text={error} />}
+    <form className="record-form" onSubmit={submit}>
+      {type === 'residents' && <>{field('full_name', 'Full name')}{field('roll_number', 'Roll number')}{field('email', 'Email', { type: 'email' })}{field('course', 'Course')}{field('academic_year', 'Academic year', { type: 'number', min: 1, max: 8 })}{field('phone', 'Phone', { required: false })}</>}
+      {type === 'rooms' && <>
+        {select('hostel_id', 'Hostel', opts.hostels.map(h => <option key={h.id} value={h.id}>{h.name}</option>), 'Select hostel')}
+        {field('room_number', 'Room number')}{field('floor', 'Floor', { type: 'number', min: 0 })}
+        {select('room_type', 'Room type', ['single', 'double', 'triple', 'quad', 'other'].map(t => <option key={t}>{t}</option>), 'Select type')}
+        {field('monthly_amount', 'Room monthly amount (₹)', { type: 'number', min: 0, step: '0.01' })}
+        {field('bed_number', 'First bed label (A or 1)', { required: false })}
+        {field('bed_count', 'Number of beds', { type: 'number', min: 1, max: 100 })}
+        {field('bed_amount', 'Per-bed monthly amount (₹, defaults to room amount)', { type: 'number', min: 0, step: '0.01', required: false })}
+      </>}
+      {type === 'allocations' && <>
+        {select('resident_id', 'Eligible resident', opts.residents.filter(r => r.eligibility_status === 'eligible' && !r.allocation_status).map(r => <option key={r.id} value={r.id}>{r.full_name} · {r.roll_number}</option>), 'Select resident')}
+        {select('bed_id', 'Free bed', opts.beds.filter(b => b.available_for_allocation).map(b => <option key={b.id} value={b.id}>{b.hostel} / {b.room_number} / {b.bed_number} · {inr(b.monthly_amount)}</option>), 'Select bed')}
+        {field('start_date', 'Start date', { type: 'date' })}
+      </>}
+      {type === 'complaints' && <>
+        {isAdmin && select('resident_id', 'Resident', opts.residents.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>), 'Select resident')}
+        {select('category', 'Category', ['electrical', 'plumbing', 'cleaning', 'furniture', 'internet', 'security', 'other'].map(c => <option key={c} value={c}>{c}</option>), 'Select category')}
+        {field('subject', 'Subject', { maxLength: 180 })}
+        <label>Description<textarea name="description" rows={3} value={form.description ?? ''} onChange={e => set('description', e.target.value)} required /></label>
+        <label>Priority<select name="priority" value={form.priority ?? 'medium'} onChange={e => set('priority', e.target.value)}>{['low', 'medium', 'high', 'urgent'].map(p => <option key={p}>{p}</option>)}</select></label>
+        {!isAdmin && <p className="muted form-note">Your current room is attached automatically.</p>}
+      </>}
+      {type === 'fees' && <>
+        <label>Invoice<select name="invoice_id" value={form.invoice_id ?? ''} required onChange={e => { const inv = payable.find(i => String(i.id) === e.target.value); setForm(f => ({ ...f, invoice_id: e.target.value, amount: inv ? inv.outstanding : '' })) }}>
+          <option value="">Select invoice</option>{payable.map(i => <option key={i.id} value={i.id}>{isAdmin ? `${i.resident_name} · ` : ''}INV-{i.id} · {i.fee_period} · due {inr(i.outstanding)}</option>)}</select></label>
+        {field('amount', 'Amount (₹)', { type: 'number', min: 0.01, step: '0.01' })}
+        {field('transaction_password', 'Confirm with your account password', { type: 'password', autoComplete: 'current-password' })}
+      </>}
+      <button className="button primary" disabled={saving}>{saving ? 'Saving…' : type === 'fees' ? 'Confirm payment' : 'Save'}</button>
+    </form>
+  </div>
 }
-function mapApiRow(type, item) {
-  const withId = values => Object.assign(values, { recordId: item.id })
-  if (type === 'residents') return withId([item.full_name, item.roll_number, item.allocation_status || 'Unassigned', item.eligibility_status]);
-  if (type === 'rooms') return withId([item.room_number, item.hostel, item.room_type, `${item.beds || 0} beds`, `${item.occupied_beds || 0} / ${item.beds || 0}`, `₹${item.monthly_amount || 0}`, Number(item.available_beds || 0) ? 'Available' : 'Full']);
-  if (type === 'allocations') return withId([item.resident_name, `${item.room_number || '—'} / ${item.bed_number || '—'}`, item.start_date, item.end_date || '—', `₹${item.monthly_amount || 0}`, item.status]);
-  if (type === 'complaints') return withId([item.subject, item.resident_name, item.category, item.priority, item.status]);
-  if (type === 'fees') return withId([item.resident_name, `INV-${item.id}`, item.fee_period, item.amount_due, item.due_date, item.status]);
-  return Object.values(item);
+
+/* ---------------------------------------------------------------- Reports ---- */
+function Reports() {
+  const { data, error, loading } = useLoad(async () => {
+    const [stats, occupancy] = await Promise.all([api.get('/api/dashboard/stats'), api.get('/api/reports/occupancy')])
+    return { stats: stats.data, occupancy: occupancy.data }
+  })
+  if (loading) return <LoadingState />
+  if (error) return <Notice text={error} />
+  const { stats, occupancy } = data
+  const totalComplaints = stats.open_complaints + stats.resolved_complaints
+  const resolvedPct = totalComplaints ? Math.round(stats.resolved_complaints / totalComplaints * 100) : 0
+  return <>
+    <div className="page-intro"><div><p className="eyebrow">INSIGHTS</p><h2>Reports</h2><p className="muted">Live numbers from the database.</p></div></div>
+    <div className="report-grid">
+      <div className="panel report-card"><div className="report-number">{inr(stats.collected_this_month)}</div><span className="muted">Collected this month</span><p className="muted" style={{ marginTop: 12 }}>Still outstanding: <strong>{inr(stats.outstanding_balance)}</strong></p></div>
+      <div className="panel report-card"><div className="report-number">{stats.occupancy_percent}%</div><span className="muted">Overall occupancy ({stats.occupied_beds} of {stats.beds} beds)</span><div className="progress"><span style={{ width: `${stats.occupancy_percent}%` }} /></div></div>
+      <div className="panel report-card"><div className="report-number">{resolvedPct}%</div><span className="muted">Complaints resolved ({stats.resolved_complaints} of {totalComplaints})</span><div className="progress purple-progress"><span style={{ width: `${resolvedPct}%` }} /></div><small className="success-text">{stats.urgent_complaints} urgent still open</small></div>
+    </div>
+    <div className="panel"><PanelHeader title="Occupancy by hostel" />
+      {occupancy.length ? <div className="report-bars">{occupancy.map(o => (
+        <div key={o.hostel}><div><span>{o.hostel} · {o.occupied_beds}/{o.total_beds} beds</span><strong>{o.occupancy_percent}%</strong></div><div className="progress"><span style={{ width: `${o.occupancy_percent}%` }} /></div></div>))}</div> : <p className="muted">No hostels yet.</p>}
+    </div>
+  </>
 }
-function Table({ columns, rows, type, onDelete, onMarkPaid, onRemovePayment }) { return <div className="table-wrap"><table><thead><tr>{columns.map(column => <th key={column}>{column}</th>)}<th>Actions</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row[0]}-${index}`}>{row.map((cell, i) => <td key={`${cell}-${i}`}>{i === 0 && type !== 'rooms' ? <div className="person-cell"><div className="avatar small">{String(cell).split(' ').map(n => n[0]).join('').slice(0, 2)}</div><strong>{cell}</strong></div> : <StatusCell value={cell} column={columns[i]} />}</td>)}<td className="row-actions">{onMarkPaid && row.recordId && !['paid', 'partially_paid'].includes(String(row[5]).toLowerCase()) && <button className="button secondary" onClick={() => onMarkPaid(row.recordId)}>Mark as paid</button>}{onRemovePayment && row.recordId && ['paid', 'partially_paid'].includes(String(row[5]).toLowerCase()) && <button className="button secondary" onClick={() => onRemovePayment(row.recordId)}>Remove payment</button>}{onDelete && row.recordId ? <button className="icon-button" title="Delete record" onClick={() => onDelete(row.recordId)}><X size={17} /></button> : !onMarkPaid && !onRemovePayment && <button className="icon-button"><MoreHorizontal size={17} /></button>}</td></tr>)}</tbody></table></div> }
-function StatusCell({ value, column }) { return ['Status', 'Priority'].includes(column) ? <span className={`badge ${value.toLowerCase().replaceAll(' ', '-')}`}>{value}</span> : value }
-function Reports() { return <><div className="page-intro"><div><p className="eyebrow">INSIGHTS</p><h2>Reports</h2><p className="muted">Understand occupancy, revenue, and operations at a glance.</p></div></div><div className="report-grid"><div className="panel report-card"><div className="report-number">₹42,680</div><span className="muted">Revenue collected this month</span><div className="mini-chart"><ResponsiveContainer width="100%" height={100}><BarChart data={dashboardData.occupancy}><Bar dataKey="occupied" fill="#0f766e" radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer></div></div><div className="panel report-card"><div className="report-number">87.4%</div><span className="muted">Average occupancy</span><div className="progress"><span style={{ width: '87.4%' }} /></div><small className="success-text">↑ 3.1% compared with last month</small></div><div className="panel report-card"><div className="report-number">96.2%</div><span className="muted">Payment collection rate</span><div className="progress purple-progress"><span style={{ width: '96.2%' }} /></div><small className="success-text">↑ 1.8% compared with last month</small></div></div><div className="panel"><PanelHeader title="Occupancy by hostel" /><div className="report-bars">{[['Maple Hall', 92], ['Cedar House', 84], ['Oak Residence', 79], ['Pine Lodge', 73]].map(([name, value]) => <div key={name}><div><span>{name}</span><strong>{value}%</strong></div><div className="progress"><span style={{ width: `${value}%` }} /></div></div>)}</div></div></> }
-function LoadingState() { return <div className="state-box"><div className="spinner" /><strong>Loading records…</strong><span className="muted">Fetching the latest data from the API.</span></div> }
-function EmptyPage({ title, icon: Icon = AlertCircle, compact = false }) { return <div className={`state-box ${compact ? 'compact' : 'large-state'}`}><div className="empty-icon"><Icon size={24} /></div><h3>{title}</h3><p className="muted">There’s nothing to show here yet. Connect your API or add your first record.</p></div> }
-function Notice({ text, type = 'error' }) { return <div className={`notice ${type}`}><AlertCircle size={17} /><span>{text}</span></div> }
+
+/* ---------------------------------------------------------------- Shared ---- */
+const LoadingState = () => <div className="state-box"><div className="spinner" /><strong>Loading…</strong><span className="muted">Fetching the latest data from the API.</span></div>
+function EmptyPage({ title, icon: Icon = AlertCircle, compact = false }) {
+  return <div className={`state-box ${compact ? 'compact' : ''}`}><div className="empty-icon"><Icon size={24} /></div><h3>{title}</h3><p className="muted">Nothing to show here yet.</p></div>
+}
+function Notice({ text, type = 'error' }) {
+  const Icon = type === 'success' ? CheckCircle2 : AlertCircle
+  return <div className={`notice ${type}`}><Icon size={17} /><span>{text}</span></div>
+}
+
 createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter><App /></BrowserRouter></React.StrictMode>)

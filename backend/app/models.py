@@ -1,4 +1,4 @@
-"""SQLAlchemy mapping of the authoritative database/schema.sql tables."""
+"""SQLAlchemy mapping of database/schema.sql (used by Alembic; the API itself uses plain SQL)."""
 from datetime import date, datetime
 from decimal import Decimal
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, JSON, Enum, func
@@ -50,6 +50,7 @@ class Room(Base):
     room_number: Mapped[str] = mapped_column(String(20))
     floor: Mapped[int] = mapped_column(Integer)
     room_type: Mapped[str] = mapped_column(String(20), default="double")
+    monthly_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     hostel: Mapped[Hostel] = relationship(back_populates="rooms")
     beds: Mapped[list["Bed"]] = relationship(back_populates="room")
@@ -60,6 +61,7 @@ class Bed(Base):
     room_id: Mapped[int] = mapped_column(ForeignKey("rooms.id"))
     bed_number: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20), default="available")
+    monthly_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     room: Mapped[Room] = relationship(back_populates="beds")
     allocations: Mapped[list["Allocation"]] = relationship(back_populates="bed")
 
@@ -71,6 +73,7 @@ class Allocation(Base):
     allocated_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date | None] = mapped_column(Date)
+    monthly_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     status: Mapped[str] = mapped_column(AllocationStatus, default="active")
     cancellation_reason: Mapped[str | None] = mapped_column(String(500))
     resident: Mapped[Resident] = relationship(back_populates="allocations")

@@ -1,7 +1,7 @@
-CREATE DATABASE IF NOT EXISTS defaultdb
+CREATE DATABASE IF NOT EXISTS hostel_management
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci;
-USE defaultdb;
+USE hostel_management;
 
 SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS activity_logs, notifications, payments, fee_invoices,

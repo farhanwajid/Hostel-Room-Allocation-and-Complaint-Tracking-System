@@ -1,4 +1,4 @@
-USE defaultdb;
+USE hostel_management;
 
 INSERT INTO users (full_name, email, password_hash, role) VALUES
 ('Farhan Wajid', 'admin@hostel.local', '$argon2id$v=19$m=65536,t=3,p=4$synthetic-admin-hash', 'administrator'),

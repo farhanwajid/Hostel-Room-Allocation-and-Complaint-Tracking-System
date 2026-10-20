@@ -10,9 +10,9 @@ from pydantic_settings import NoDecode
 class Settings(BaseSettings):
     app_env: str = "development"
     app_name: str = "Hostel Management API"
-    # Safe development defaults keep importing the application side-effect free.
+    # The API uses MySQL-specific SQL, so SQLite is not supported.
     # Production deployments must override both values through the environment.
-    database_url: str = "sqlite:///./hostel_management.db"
+    database_url: str = "mysql+pymysql://root:password@127.0.0.1:3306/hostel_management"
     jwt_secret_key: str = "development-only-change-this-secret-32chars"
     jwt_access_token_minutes: int = 30
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]

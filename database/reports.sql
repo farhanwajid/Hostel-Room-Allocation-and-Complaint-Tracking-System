@@ -1,4 +1,4 @@
-USE defaultdb;
+USE hostel_management;
 
 -- Occupancy by hostel, including hostels with no rooms.
 SELECT h.name AS hostel,
