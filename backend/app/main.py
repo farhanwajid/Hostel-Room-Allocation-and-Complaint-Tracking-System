@@ -64,7 +64,7 @@ def auto_assign_unallocated(db: Session, admin_id: int) -> None:
         SELECT r.id, r.academic_year
         FROM residents r
         LEFT JOIN allocations a ON a.resident_id=r.id AND a.status='active'
-        WHERE r.is_active=1 AND r.eligibility_status='eligible' AND a.id IS NULL
+        WHERE r.is_active=1 AND r.eligibility_status IN ('eligible', 'pending') AND a.id IS NULL
         ORDER BY r.id
     """)).mappings().all()
     for resident in residents:
@@ -238,7 +238,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
                     INSERT INTO residents
                       (user_id, roll_number, full_name, email, phone, course, academic_year, eligibility_status)
                     VALUES
-                      (:user_id, :roll_number, :full_name, :email, :phone, :course, :academic_year, 'pending')
+                      (:user_id, :roll_number, :full_name, :email, :phone, :course, :academic_year, 'eligible')
                 """),
                 {"user_id": user_result.lastrowid, **payload.model_dump(exclude={"password"})},
             )
@@ -345,6 +345,9 @@ def residents(_: dict = Depends(current_user), db: Session = Depends(get_db)) ->
 @app.get("/allocations")
 @app.get("/api/allocations")
 def allocations(user: dict = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    if user["role"] == "administrator":
+        auto_assign_unallocated(db, user["id"])
+        db.commit()
     return [dict(row) for row in db.execute(text("""
         SELECT a.id, res.full_name AS resident_name, h.name AS hostel,
                r.room_number, b.bed_number, a.start_date, a.end_date, a.status,
@@ -604,7 +607,7 @@ def allocate(payload: AllocationCreate, user: dict = Depends(current_user), db: 
     try:
         resident = db.execute(text("SELECT id, eligibility_status, academic_year FROM residents WHERE id=:id FOR UPDATE"), {"id": payload.resident_id}).mappings().one_or_none()
         bed = db.execute(text("SELECT id, status, monthly_amount FROM beds WHERE id=:id FOR UPDATE"), {"id": payload.bed_id}).mappings().one_or_none()
-        if not resident or resident["eligibility_status"] != "eligible":
+        if not resident or resident["eligibility_status"] not in {"eligible", "pending"}:
             raise HTTPException(status_code=409, detail="Resident is not eligible for allocation")
         if not bed or bed["status"] != "available":
             raise HTTPException(status_code=409, detail="Bed is unavailable")
