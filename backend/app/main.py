@@ -345,9 +345,6 @@ def residents(_: dict = Depends(current_user), db: Session = Depends(get_db)) ->
 @app.get("/allocations")
 @app.get("/api/allocations")
 def allocations(user: dict = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
-    if user["role"] == "administrator":
-        auto_assign_unallocated(db, user["id"])
-        db.commit()
     return [dict(row) for row in db.execute(text("""
         SELECT a.id, res.full_name AS resident_name, h.name AS hostel,
                r.room_number, b.bed_number, a.start_date, a.end_date, a.status,
@@ -611,6 +608,12 @@ def allocate(payload: AllocationCreate, user: dict = Depends(current_user), db: 
             raise HTTPException(status_code=409, detail="Resident is not eligible for allocation")
         if not bed or bed["status"] != "available":
             raise HTTPException(status_code=409, detail="Bed is unavailable")
+        occupied = db.execute(
+            text("SELECT id FROM allocations WHERE bed_id=:bed_id AND status='active'"),
+            {"bed_id": payload.bed_id},
+        ).first()
+        if occupied:
+            raise HTTPException(status_code=409, detail="Bed already has an active allocation")
         existing = db.execute(text("SELECT id FROM allocations WHERE resident_id=:resident_id AND status='active'"), {"resident_id": payload.resident_id}).first()
         if existing:
             raise HTTPException(status_code=409, detail="Resident already has an active allocation")
