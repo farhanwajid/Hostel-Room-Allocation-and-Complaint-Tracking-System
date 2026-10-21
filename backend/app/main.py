@@ -902,3 +902,56 @@ def occupancy_report(_: dict = Depends(current_user), db: Session = Depends(get_
         LEFT JOIN allocations a ON a.bed_id=b.id AND a.status='active'
         GROUP BY h.id ORDER BY h.name
     """)).mappings().all()]
+
+
+@app.get("/api/reports/summary")
+def reports_summary(user: dict = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    require_admin(user)
+    try:
+        stats = db.execute(text("""
+            SELECT
+              (SELECT COUNT(*) FROM residents WHERE is_active=1) AS residents,
+              (SELECT COUNT(*) FROM rooms WHERE is_active=1) AS rooms,
+              (SELECT COUNT(*) FROM beds WHERE status <> 'retired') AS beds,
+              (SELECT COUNT(*) FROM allocations WHERE status='active') AS occupied_beds,
+              (SELECT COUNT(*) FROM beds WHERE status='available') AS available_beds,
+              (SELECT COUNT(*) FROM complaints WHERE status NOT IN ('resolved', 'closed')) AS open_complaints,
+              (SELECT COUNT(*) FROM complaints WHERE status IN ('resolved', 'closed')) AS resolved_complaints,
+              (SELECT COUNT(*) FROM complaints WHERE status='in_progress') AS in_progress_complaints,
+              (SELECT COUNT(*) FROM complaints WHERE priority='urgent' AND status NOT IN ('resolved', 'closed')) AS urgent_complaints,
+              (SELECT COUNT(*) FROM fee_invoices WHERE status <> 'cancelled') AS invoices,
+              (SELECT COALESCE(SUM(p.amount), 0) FROM payments p) AS paid_amount,
+              (SELECT COALESCE(SUM(i.amount_due - COALESCE(p.paid, 0)), 0)
+                 FROM fee_invoices i
+                 LEFT JOIN (SELECT invoice_id, SUM(amount) paid FROM payments GROUP BY invoice_id) p
+                   ON p.invoice_id=i.id
+                WHERE i.status <> 'cancelled') AS outstanding_balance
+        """)).mappings().one()
+        occupancy = db.execute(text("""
+            SELECT h.name AS hostel, COUNT(b.id) AS total_beds,
+                   COUNT(a.id) AS occupied_beds,
+                   COALESCE(SUM(b.status='available'), 0) AS available_beds
+            FROM hostels h
+            LEFT JOIN rooms r ON r.hostel_id=h.id AND r.is_active=1
+            LEFT JOIN beds b ON b.room_id=r.id AND b.status <> 'retired'
+            LEFT JOIN allocations a ON a.bed_id=b.id AND a.status='active'
+            WHERE h.is_active=1
+            GROUP BY h.id, h.name
+            ORDER BY h.name
+        """)).mappings().all()
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="Report data is unavailable") from exc
+    result = dict(stats)
+    result["occupancy_percent"] = round(
+        int(result["occupied_beds"] or 0) / int(result["beds"] or 0) * 100, 1
+    ) if result["beds"] else 0
+    result["hostels"] = [
+        {
+            **dict(row),
+            "occupancy_percent": round(
+                int(row["occupied_beds"] or 0) / int(row["total_beds"] or 0) * 100, 1
+            ) if row["total_beds"] else 0,
+        }
+        for row in occupancy
+    ]
+    return result

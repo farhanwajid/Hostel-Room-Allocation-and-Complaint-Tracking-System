@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { jsPDF } from 'jspdf'
 import { AlertCircle, ArrowDownRight, ArrowUpRight, BedDouble, ChevronRight, CircleDollarSign, ClipboardList, FileBarChart, Home, LogOut, Menu, MessageSquare, MoreHorizontal, Plus, Search, Settings, Users, X } from 'lucide-react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import './styles.css'
@@ -55,7 +56,7 @@ function Shell({ user, onLogout }) {
   const role = user.role; const isAdmin = role === 'administrator'; const isMaintenance = role === 'maintenance_staff'
   const visibleItems = isAdmin ? navItems : navItems.filter(item => ['/', '/complaints', '/fees'].includes(item.to) && !(isMaintenance && item.to === '/fees'))
   const initials = user.full_name.split(' ').map(part => part[0]).join('').slice(0, 2).toUpperCase()
-  return <div className="app-shell"><aside className={`sidebar ${mobileOpen ? 'open' : ''}`}><div className="sidebar-top"><div className="brand-row"><div className="brand-mark">H</div><span>HostelHub</span></div><button className="icon-button mobile-close" onClick={() => setMobileOpen(false)}><X size={20} /></button></div><div className="workspace-switch"><div className="avatar">{initials}</div><div><strong>{isAdmin ? 'Admin workspace' : 'Resident workspace'}</strong><small>Central campus</small></div><ChevronRight size={15} /></div><nav>{visibleItems.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} end={to === '/'} onClick={() => setMobileOpen(false)}><Icon size={18} /><span>{label}</span></NavLink>)}</nav><div className="sidebar-footer">{isAdmin && <NavLink to="/settings"><Settings size={18} />Settings</NavLink>}<button className="logout-link" onClick={onLogout}><LogOut size={18} />Sign out</button><div className="user-row"><div className="avatar green">{initials}</div><div><strong>{user.full_name}</strong><small>{role.replace('_', ' ')}</small></div><MoreHorizontal size={17} /></div></div></aside><main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={22} /></button><div><div className="breadcrumb">Workspace <ChevronRight size={13} /> <strong>{title}</strong></div><h1>{title}</h1></div><div className="topbar-actions"><div className="avatar green">{initials}</div></div></header><div className="page-content"><Routes><Route path="/" element={<Dashboard user={user} />} /><Route path="/residents" element={isAdmin ? <DataPage type="residents" user={user} /> : <EmptyPage title="Resident profile" icon={Users} />} /><Route path="/rooms" element={isAdmin ? <DataPage type="rooms" user={user} /> : <Navigate to="/" replace />} /><Route path="/allocations" element={isAdmin ? <DataPage type="allocations" user={user} /> : <Navigate to="/" replace />} /><Route path="/complaints" element={<DataPage type="complaints" user={user} />} /><Route path="/fees" element={<DataPage type="fees" user={user} />} /><Route path="/reports" element={isAdmin ? <Reports /> : <Navigate to="/" replace />} /><Route path="/settings" element={isAdmin ? <EmptyPage title="Settings" icon={Settings} /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></div></main></div>
+  return <div className="app-shell"><aside className={`sidebar ${mobileOpen ? 'open' : ''}`}><div className="sidebar-top"><div className="brand-row"><div className="brand-mark">H</div><span>HostelHub</span></div><button className="icon-button mobile-close" onClick={() => setMobileOpen(false)}><X size={20} /></button></div><div className="workspace-switch"><div className="avatar">{initials}</div><div><strong>{isAdmin ? 'Admin workspace' : 'Resident workspace'}</strong><small>Central campus</small></div><ChevronRight size={15} /></div><nav>{visibleItems.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} end={to === '/'} onClick={() => setMobileOpen(false)}><Icon size={18} /><span>{label}</span></NavLink>)}</nav><div className="sidebar-footer"><button className="logout-link" onClick={onLogout}><LogOut size={18} />Sign out</button><div className="user-row"><div className="avatar green">{initials}</div><div><strong>{user.full_name}</strong><small>{role.replace('_', ' ')}</small></div><MoreHorizontal size={17} /></div></div></aside><main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMobileOpen(true)}><Menu size={22} /></button><div><div className="breadcrumb">Workspace <ChevronRight size={13} /> <strong>{title}</strong></div><h1>{title}</h1></div><div className="topbar-actions"><div className="avatar green">{initials}</div></div></header><div className="page-content"><Routes><Route path="/" element={<Dashboard user={user} />} /><Route path="/residents" element={isAdmin ? <DataPage type="residents" user={user} /> : <EmptyPage title="Resident profile" icon={Users} />} /><Route path="/rooms" element={isAdmin ? <DataPage type="rooms" user={user} /> : <Navigate to="/" replace />} /><Route path="/allocations" element={isAdmin ? <DataPage type="allocations" user={user} /> : <Navigate to="/" replace />} /><Route path="/complaints" element={<DataPage type="complaints" user={user} />} /><Route path="/fees" element={<DataPage type="fees" user={user} />} /><Route path="/reports" element={isAdmin ? <Reports /> : <Navigate to="/" replace />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></div></main></div>
 }
 function Dashboard({ user }) {
   const navigate = useNavigate()
@@ -146,7 +147,69 @@ function mapApiRow(type, item) {
 }
 function Table({ columns, rows, type, onDelete, onMarkPaid, onRemovePayment }) { return <div className="table-wrap"><table><thead><tr>{columns.map(column => <th key={column}>{column}</th>)}<th>Actions</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row[0]}-${index}`}>{row.map((cell, i) => <td key={`${cell}-${i}`}>{i === 0 && type !== 'rooms' ? <div className="person-cell"><div className="avatar small">{String(cell).split(' ').map(n => n[0]).join('').slice(0, 2)}</div><strong>{cell}</strong></div> : <StatusCell value={cell} column={columns[i]} />}</td>)}<td className="row-actions">{onMarkPaid && row.recordId && !['paid', 'partially_paid'].includes(String(row[5]).toLowerCase()) && <button className="button secondary" onClick={() => onMarkPaid(row.recordId)}>Mark as paid</button>}{onRemovePayment && row.recordId && ['paid', 'partially_paid'].includes(String(row[5]).toLowerCase()) && <button className="button secondary" onClick={() => onRemovePayment(row.recordId)}>Remove payment</button>}{onDelete && row.recordId ? <button className="icon-button" title="Delete record" onClick={() => onDelete(row.recordId)}><X size={17} /></button> : !onMarkPaid && !onRemovePayment && <button className="icon-button"><MoreHorizontal size={17} /></button>}</td></tr>)}</tbody></table></div> }
 function StatusCell({ value, column }) { return ['Status', 'Priority'].includes(column) ? <span className={`badge ${value.toLowerCase().replaceAll(' ', '-')}`}>{value}</span> : value }
-function Reports() { return <><div className="page-intro"><div><p className="eyebrow">INSIGHTS</p><h2>Reports</h2><p className="muted">Understand occupancy, revenue, and operations at a glance.</p></div></div><div className="report-grid"><div className="panel report-card"><div className="report-number">₹42,680</div><span className="muted">Revenue collected this month</span><div className="mini-chart"><ResponsiveContainer width="100%" height={100}><BarChart data={dashboardData.occupancy}><Bar dataKey="occupied" fill="#0f766e" radius={[3, 3, 0, 0]} /></BarChart></ResponsiveContainer></div></div><div className="panel report-card"><div className="report-number">87.4%</div><span className="muted">Average occupancy</span><div className="progress"><span style={{ width: '87.4%' }} /></div><small className="success-text">↑ 3.1% compared with last month</small></div><div className="panel report-card"><div className="report-number">96.2%</div><span className="muted">Payment collection rate</span><div className="progress purple-progress"><span style={{ width: '96.2%' }} /></div><small className="success-text">↑ 1.8% compared with last month</small></div></div><div className="panel"><PanelHeader title="Occupancy by hostel" /><div className="report-bars">{[['Maple Hall', 92], ['Cedar House', 84], ['Oak Residence', 79], ['Pine Lodge', 73]].map(([name, value]) => <div key={name}><div><span>{name}</span><strong>{value}%</strong></div><div className="progress"><span style={{ width: `${value}%` }} /></div></div>)}</div></div></> }
+function Reports() {
+  const [report, setReport] = useState(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    api.get('/api/reports/summary')
+      .then(response => setReport(response.data))
+      .catch(err => setError(err.response?.data?.detail || 'Report data could not be loaded.'))
+  }, [])
+
+  const money = value => `₹${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+  const downloadPdf = () => {
+    if (!report) return
+    const pdf = new jsPDF()
+    let y = 18
+    pdf.setFontSize(18)
+    pdf.text('Hostel Management Summary Report', 14, y)
+    y += 8
+    pdf.setFontSize(10)
+    pdf.setTextColor(90)
+    pdf.text(`Generated: ${new Date().toLocaleString()}`, 14, y)
+    y += 12
+    pdf.setTextColor(30)
+    pdf.setFontSize(12)
+    pdf.text('Overall summary', 14, y)
+    y += 8
+    pdf.setFontSize(10)
+    ;[
+      `Residents: ${report.residents}`,
+      `Rooms: ${report.rooms}`,
+      `Beds: ${report.beds}`,
+      `Occupied beds: ${report.occupied_beds}`,
+      `Available beds: ${report.available_beds}`,
+      `Occupancy: ${report.occupancy_percent}%`,
+      `Open complaints: ${report.open_complaints}`,
+      `Resolved complaints: ${report.resolved_complaints}`,
+      `Urgent complaints: ${report.urgent_complaints}`,
+      `Invoices: ${report.invoices}`,
+      `Paid amount: ${money(report.paid_amount)}`,
+      `Outstanding fees: ${money(report.outstanding_balance)}`,
+    ].forEach(line => { pdf.text(line, 18, y); y += 6 })
+    y += 6
+    pdf.setFontSize(12)
+    pdf.text('Occupancy by hostel', 14, y)
+    y += 8
+    pdf.setFontSize(10)
+    report.hostels.forEach(hostel => {
+      if (y > 275) { pdf.addPage(); y = 18 }
+      pdf.text(`${hostel.hostel}: ${hostel.occupied_beds}/${hostel.total_beds} occupied (${hostel.occupancy_percent}%), ${hostel.available_beds} available`, 18, y)
+      y += 6
+    })
+    pdf.save(`hostel-summary-${new Date().toISOString().slice(0, 10)}.pdf`)
+  }
+
+  if (error) return <><div className="page-intro"><div><p className="eyebrow">INSIGHTS</p><h2>Reports</h2></div></div><Notice text={error} /></>
+  if (!report) return <LoadingState />
+  const cards = [
+    ['Total residents', report.residents, Users, 'teal'],
+    ['Rooms and beds', `${report.rooms} / ${report.beds}`, BedDouble, 'blue'],
+    ['Occupancy', `${report.occupancy_percent}%`, BedDouble, 'orange'],
+    ['Outstanding fees', money(report.outstanding_balance), CircleDollarSign, 'purple'],
+  ]
+  return <><div className="page-intro"><div><p className="eyebrow">INSIGHTS</p><h2>Reports</h2><p className="muted">A complete summary of hostel residents, rooms, complaints, occupancy, and payments.</p></div><button className="button primary" onClick={downloadPdf}><FileBarChart size={17} /> Download PDF</button></div><div className="stats-grid">{cards.map(([label, value, Icon, tone]) => <StatCard key={label} label={label} value={value} icon={Icon} tone={tone} />)}</div><div className="report-summary-grid"><section className="panel"><PanelHeader title="Operations summary" /><div className="summary-list"><div><span>Occupied beds</span><strong>{report.occupied_beds}</strong></div><div><span>Available beds</span><strong>{report.available_beds}</strong></div><div><span>Open complaints</span><strong>{report.open_complaints}</strong></div><div><span>In-progress complaints</span><strong>{report.in_progress_complaints}</strong></div><div><span>Resolved complaints</span><strong>{report.resolved_complaints}</strong></div><div><span>Urgent complaints</span><strong>{report.urgent_complaints}</strong></div></div></section><section className="panel"><PanelHeader title="Payment summary" /><div className="summary-list"><div><span>Total invoices</span><strong>{report.invoices}</strong></div><div><span>Paid amount</span><strong>{money(report.paid_amount)}</strong></div><div><span>Outstanding fees</span><strong>{money(report.outstanding_balance)}</strong></div></div></section></div><section className="panel"><PanelHeader title="Occupancy by hostel" /><div className="report-bars">{report.hostels.length ? report.hostels.map(hostel => <div key={hostel.hostel}><div><span>{hostel.hostel}</span><strong>{hostel.occupancy_percent}% ({hostel.occupied_beds}/{hostel.total_beds})</strong></div><div className="progress"><span style={{ width: `${Math.min(100, hostel.occupancy_percent)}%` }} /></div><small className="muted">{hostel.available_beds} beds available</small></div>) : <p className="muted">No hostel occupancy data available.</p>}</div></section></>
+}
 function LoadingState() { return <div className="state-box"><div className="spinner" /><strong>Loading records…</strong><span className="muted">Fetching the latest data from the API.</span></div> }
 function EmptyPage({ title, icon: Icon = AlertCircle, compact = false }) { return <div className={`state-box ${compact ? 'compact' : 'large-state'}`}><div className="empty-icon"><Icon size={24} /></div><h3>{title}</h3><p className="muted">There’s nothing to show here yet. Connect your API or add your first record.</p></div> }
 function Notice({ text, type = 'error' }) { return <div className={`notice ${type}`}><AlertCircle size={17} /><span>{text}</span></div> }
