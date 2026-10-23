@@ -379,7 +379,7 @@ class TransferCreate(BaseModel):
 
 
 class ComplaintCreate(BaseModel):
-    resident_id: int
+    resident_id: int | None = None
     room_id: int | None = None
     bed_id: int | None = None
     category: str
@@ -686,7 +686,14 @@ def transfer(allocation_id: int, payload: TransferCreate, user: dict = Depends(c
 
 @app.post("/api/complaints", status_code=201)
 def create_complaint(payload: ComplaintCreate, user: dict = Depends(current_user), db: Session = Depends(get_db)) -> dict:
-    if user["role"] == "resident" and payload.resident_id != user.get("resident_id"):
+    resident_id = payload.resident_id
+    if user["role"] == "resident":
+        resident_id = user.get("resident_id")
+        if not resident_id:
+            raise HTTPException(status_code=403, detail="Resident profile is not linked to this account")
+    if not resident_id:
+        raise HTTPException(status_code=422, detail="Resident is required")
+    if user["role"] == "resident" and payload.resident_id not in {None, resident_id}:
         raise HTTPException(status_code=403, detail="Residents may only submit their own complaints")
     if payload.category not in {"electrical", "plumbing", "cleaning", "furniture", "internet", "security", "other"}:
         raise HTTPException(status_code=422, detail="Invalid complaint category")
@@ -696,9 +703,9 @@ def create_complaint(payload: ComplaintCreate, user: dict = Depends(current_user
         row = db.execute(text("""
             INSERT INTO complaints (resident_id, room_id, bed_id, category, subject, description, priority)
             VALUES (:resident_id, :room_id, :bed_id, :category, :subject, :description, :priority)
-        """), payload.model_dump())
+        """), {**payload.model_dump(), "resident_id": resident_id})
         db.commit()
-        return {"id": row.lastrowid, **payload.model_dump(), "status": "open"}
+        return {"id": row.lastrowid, **payload.model_dump(), "resident_id": resident_id, "status": "open"}
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail="Complaint could not be created") from exc
@@ -726,12 +733,19 @@ def update_complaint(complaint_id: int, payload: ComplaintUpdate, user: dict = D
 
 @app.delete("/api/complaints/{complaint_id}")
 def delete_complaint(complaint_id: int, user: dict = Depends(current_user), db: Session = Depends(get_db)) -> dict:
-    require_admin(user)
+    if user["role"] not in {"administrator", "resident"}:
+        raise HTTPException(status_code=403, detail="Complaint deletion permission required")
     try:
-        db.execute(text("DELETE FROM complaint_updates WHERE complaint_id=:id"), {"id": complaint_id})
-        result = db.execute(text("DELETE FROM complaints WHERE id=:id"), {"id": complaint_id})
+        ownership_sql = "AND resident_id=:resident_id" if user["role"] == "resident" else ""
+        params = {"id": complaint_id}
+        if user["role"] == "resident":
+            if not user.get("resident_id"):
+                raise HTTPException(status_code=403, detail="Resident profile is not linked to this account")
+            params["resident_id"] = user["resident_id"]
+        result = db.execute(text(f"DELETE FROM complaints WHERE id=:id {ownership_sql}"), params)
         if result.rowcount != 1:
-            raise HTTPException(status_code=404, detail="Complaint not found")
+            raise HTTPException(status_code=404, detail="Complaint not found or it does not belong to you")
+        db.execute(text("DELETE FROM complaint_updates WHERE complaint_id=:id"), {"id": complaint_id})
         db.commit()
         return {"id": complaint_id, "deleted": True}
     except HTTPException:
